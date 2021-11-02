@@ -6,38 +6,41 @@ from dateutil.relativedelta import *
 import sys
 import os
 import datetime
+import camera
+import csv
+import time
 
 ENTER_TEXT = "Enter information"
 MAIN_TABLE = "Patients"
 TOP_REL_HIGH = 0.1
+RECORD_TIME = 6
 BOTTOM_REL_HIGH = 0.9
 FONT = ("Courier", 16)
-COLUMNS_NAMES = ( "Date", "Age", "Weight", "Height", 'Scoliosis', 'Kyphosis', 'Lordosis', 'Posture', 'Markers')
+COLUMNS_NAMES = ("Date", "Age", "Weight", "Height", 'Scoliosis', 'Kyphosis', 'Lordosis', 'Posture', 'Markers')
 PATIENT_FIELDS = {'id_num': 'ID:', 'name': 'Name:', 'surname': 'Surname:', 'DoB': 'Date of birth:', 'gender': 'Gender:',
                   'Height': 'Height', 'Weight': 'Weight:',
-                  'Scoliosis' :'Scoliosis:', 'Kyphosis':'Kyphosis:', 'Lordosis':'Lordosis:',
-                  'Posture':'Posture:', 'Markers': 'Markers:'}
+                  'Scoliosis': 'Scoliosis:', 'Kyphosis': 'Kyphosis:', 'Lordosis': 'Lordosis:',
+                  'Posture': 'Posture:', 'Markers': 'Markers:'}
 MAIN_COLS = """(id_num text NOT NULL PRIMARY KEY, name text, surname text, DoB text, gender text, Height text,
               Weight text, Scoliosis text, Kyphosis text, Lordosis text, Posture text, Markers text)"""
 PAT_COL_INDEX = {'id_num': 0, 'name': 1, 'surname': 2, 'DoB': 3, 'gender': 4,
-                  'Height': 5, 'Weight': 6,
-                 'Scoliosis' : 7, 'Kyphosis': 8, 'Lordosis':9, 'Posture':10, 'Markers': 11}
+                 'Height': 5, 'Weight': 6,
+                 'Scoliosis': 7, 'Kyphosis': 8, 'Lordosis': 9, 'Posture': 10, 'Markers': 11}
 PATIENT_COLS = """(date text, age REAL, Weight REAL, Height REAL, Scoliosis text, Kyphosis text,
  Lordosis text, Posture text, Markers text)"""
-PAT_DICT = {"Date": "data", "Age":'age', "Weight": 'Weight', "Height":'Height', 'Scoliosis' :'Scoliosis',
-            'Kyphosis':'Kyphosis', 'Lordosis':'Lordosis',
-                  'Posture':'Posture', 'Markers': 'Markers'}
+PAT_DICT = {"Date": "data", "Age": 'age', "Weight": 'Weight', "Height": 'Height', 'Scoliosis': 'Scoliosis',
+            'Kyphosis': 'Kyphosis', 'Lordosis': 'Lordosis',
+            'Posture': 'Posture', 'Markers': 'Markers'}
 PAT_TABLE_NAME = "Patient_{rowid}"
-CHOOSE_FIELDS = {'Scoliosis' : ['Yes','No'], 'Kyphosis': ['Yes','No'], 'Lordosis': ['Yes','No'],
-                  'Posture': ["Upright stomding", "Neck flexion", "Vertebral column flexion"], 'Markers': ['Yes','No']}
-
+CHOOSE_FIELDS = {'Scoliosis': ['Yes', 'No'], 'Kyphosis': ['Yes', 'No'], 'Lordosis': ['Yes', 'No'],
+                 'Posture': ["Upright standing", "Neck flexion", "Vertebral column flexion"], 'Markers': ['Yes', 'No']}
 
 
 class Entr:
     def __init__(self, parent, row, col, text, var, default=""):
         self.label = Entry(parent, textvariable=var)
-        self.label.grid(row=row, column=col + 1, sticky=W, padx=5, pady=10 , in_=parent)
-        chanel_num_label = Label(parent, text=text,  bg='gray85', font=("Courier", 16))
+        self.label.grid(row=row, column=col + 1, sticky=W, padx=5, pady=10, in_=parent)
+        chanel_num_label = Label(parent, text=text, bg='gray85', font=("Courier", 16))
         chanel_num_label.grid(row=row, column=col, sticky=W, padx=5, in_=parent)
         self.label.insert(0, default)
 
@@ -57,7 +60,7 @@ class CBox:
         self.label.grid(row=row, column=col + 1, sticky=W, padx=5, pady=10, in_=parent)
         chanel_num_label = Label(parent, text=text, bg='gray85', font=("Courier", 16))
         chanel_num_label.grid(row=row, column=col, sticky=W, padx=5, in_=parent)
-        self.label.insert(0, default)
+        self.label.insert(END, default)
 
     def get_data(self):
         return float(self.label.get())
@@ -68,6 +71,7 @@ class CBox:
 
 class Screen:
     def __init__(self, parent):
+        self.frames_num = IntVar()
         self.parent = parent
         self.data_path = os.path.dirname(sys.argv[0])
         self.tab_parent = ttk.Notebook(parent)
@@ -85,9 +89,44 @@ class Screen:
         self.make_menu()
         self.patient_page()
         self.his_page()
+        self.current_dir = None
+        self.cam = camera.Camera()
+        self.dist_label = None
+        self.cam_status = None
+        self.cam_interface = Frame(self.meas)
         self.meas_page()
+        self.make_tech()
+        self.capture_num = 0
         self.db = Database()
-        self.cur_meas = {col : '' for col in COLUMNS_NAMES}
+        self.cur_meas = {col: '' for col in COLUMNS_NAMES}
+        # self.update_distance()
+        # self.update_display()
+        self.time = None
+        self.camera_loop()
+
+    def camera_loop(self):
+        if self.cam.ready:
+            update_fail = self.cam.update_frames()
+            if update_fail:
+                msg.showerror("Camera error", "cam connection failed ):")
+                self.cam_status.config(bg='red')
+            else:
+                if self.capture_num == 2:
+                    if time.time() - self.time > RECORD_TIME:
+                        self.cam.record_stop()
+                        self.capture_num = 0
+                        msg.showinfo(message="Capture complete")
+                        self.cam.close_pipe()
+                        self.cam_status.config(bg="red")
+                elif self.capture_num == 1:
+                    self.time = time.time()
+                    self.cam.record_start()
+                    self.capture_num = 2
+                self.dist_label.config(text=str(self.cam.distance())[:6])
+                self.cam.display()
+        else:
+            self.dist_label.config(text="0.0")
+        self.parent.after(100, self.camera_loop)
 
     def search(self, event=None):
         cur_id = self.cur_patient['id_num'].get()
@@ -96,14 +135,15 @@ class Screen:
         if patient:
             self.new_pat()
             self.cur_rowid = self.db.get_rowid(MAIN_TABLE, cur_id, MAIN_COLS)
-            path = os.path.join(self.data_path, "Patient_" + str(self.cur_rowid))
+            path = os.path.join(self.data_path, "Patient_" + str(cur_id))
             for key, var in self.cur_patient.items():
                 var.set(patient[0][PAT_COL_INDEX[key]])
             for key, item in self.MedText.items():
-                cur_path = os.path.join(path, f"{self.cur_rowid}_{key}.txt")
+                cur_path = os.path.join(path, f"{self.cur_patient['id_num'].get()}_{key}.txt")
                 item.read_file(cur_path)
             for index, meas in enumerate(self.db.get_all_tab(PAT_TABLE_NAME.format(rowid=self.cur_rowid))):
                 self.his_table.insert(meas)
+            self.cam_interface.grid(row=1, column=0)
         else:
             msg.showerror("Search Error", "Patient not found ):")
             return
@@ -112,7 +152,7 @@ class Screen:
 
     def make_text_files(self, dir_path, rowid):
         for key, item in self.MedText.items():
-            cur_path = os.path.join(dir_path, f"{rowid}_{key}.txt")
+            cur_path = os.path.join(dir_path, f"{self.cur_patient['id_num'].get()}_{key}.txt")
             file = open(cur_path, "w+")
             file.close()
             item.read_file(cur_path)
@@ -125,7 +165,7 @@ class Screen:
             return
         self.db.insert(tuple(new_pat), MAIN_TABLE, MAIN_COLS)
         rowid = self.db.get_rowid(MAIN_TABLE, cur_id, MAIN_COLS)
-        new_dir = os.path.join(self.data_path, "Patient_" + str(rowid))
+        new_dir = os.path.join(self.data_path, "Patient_" + str(cur_id))
         if not os.path.exists(new_dir):
             os.mkdir(new_dir)
             self.make_text_files(new_dir, rowid)
@@ -136,6 +176,7 @@ class Screen:
         msg.showinfo(message="Save complete")
         self.cur_rowid = rowid
         self.db.commit()
+        self.cam_interface.grid(row=1, column=0)
 
     def new_pat(self):
         for var in self.cur_patient.values():
@@ -144,6 +185,8 @@ class Screen:
             medText.clear()
         self.his_table.delete()
         self.cur_rowid = 0
+        self.cam_interface.forget()
+        self.current_dir = None
 
     def edit(self):
         if self.cur_rowid == 0:
@@ -170,19 +213,27 @@ class Screen:
 
         self.tab_parent.pack(expand=1, fill='both')
 
+    def make_csv(self):
+        self.db.tab_to_csv(MAIN_TABLE, PATIENT_FIELDS.values())
+        msg.showinfo(message="Complete")
+
+    def make_tech(self):
+        Button(self.tech, text="Make CsV Table", width=20, height=6, command=self.make_csv).grid(row=0, column=0,
+                                                                                                 rowspan=2,
+                                                                                                 padx=6)
+
     def patient_page(self):
-        #top frame
+        # top frame
         self.top = Frame(self.patient, bg='gray85')
         self.top.grid(row=0, column=0, rowspan=1, columnspan=12, pady=20, padx=20)
         self.entr['id_num'] = Entr(self.top, 0, 0, "ID Number:", self.cur_patient['id_num'])
         self.entr['id_num'].bind('<Return>', self.search)
         self.entr['name'] = Entr(self.top, 0, 2, "Name:", self.cur_patient['name'])
         self.entr['surname'] = Entr(self.top, 0, 4, "Surname:", self.cur_patient['surname'])
-        Button(self.top, text="Search", width=10, height=2, command=self.search).grid(row=0, column=6, rowspan=2, padx=6)
-
-
-        #left frame
-        left_frame = LabelFrame(self.patient,  bg='gray85', text='info')
+        Button(self.top, text="Search", width=10, height=2, command=self.search).grid(row=0, column=6, rowspan=2,
+                                                                                      padx=6)
+        # left frame
+        left_frame = LabelFrame(self.patient, bg='gray85', text='info')
         left_frame.grid(row=1, column=0, rowspan=4, columnspan=6, pady=5, padx=5)
         self.entr['DoB'] = Date(left_frame, 0, 0)
         self.cur_patient['DoB'] = self.entr['DoB']
@@ -196,24 +247,21 @@ class Screen:
             self.entr[key] = CBox(left_frame, counter, 0, PATIENT_FIELDS[key], self.cur_patient[key], values)
             counter += 1
 
-
-
-        #right_frame
-        right_frame = LabelFrame(self.patient,  bg='gray85', text='info')
+        # right_frame
+        right_frame = LabelFrame(self.patient, bg='gray85', text='info')
         right_frame.grid(row=1, column=6, rowspan=10, columnspan=10, pady=5, padx=5, sticky=NW)
         self.MedText['Med_bg'] = MedText(right_frame, "Medical background:", 0, 0)
         self.MedText['fam_his'] = MedText(right_frame, "Family history:", 3, 0)
         self.MedText['other'] = MedText(right_frame, 'Other:', 0, 1)
 
-
-        #low_frame
-        low_frame = LabelFrame(self.patient,  bg='gray85', text='options')
+        # low_frame
+        low_frame = LabelFrame(self.patient, bg='gray85', text='options')
         low_frame.grid(row=12, column=0, rowspan=10, columnspan=10, pady=5, padx=5, sticky=NW)
-        Button(low_frame, text="Clear patient\ndata", width=15, height=4, font=FONT, command=self.new_pat)\
+        Button(low_frame, text="Clear patient\ndata", width=15, height=4, font=FONT, command=self.new_pat) \
             .grid(row=0, column=0, pady=5, padx=15)
-        Button(low_frame, text="Edit patient\ninfo", width=15, height=4, font=FONT, command=self.edit)\
+        Button(low_frame, text="Edit patient\ninfo", width=15, height=4, font=FONT, command=self.edit) \
             .grid(row=0, column=1, pady=5, padx=15)
-        Button(low_frame, text="Save new\npatient", width=15, height=4, font=FONT, command=self.save).grid\
+        Button(low_frame, text="Save new\npatient", width=15, height=4, font=FONT, command=self.save).grid \
             (row=0, column=2, pady=5, padx=15)
         Button(low_frame, text="Cancel", width=15, height=4, font=FONT).grid(row=0, column=3, pady=5, padx=15)
         Button(low_frame, text="Print", width=15, height=4, font=FONT).grid(row=0, column=4, pady=5, padx=15)
@@ -222,12 +270,15 @@ class Screen:
         # top frame
         top_frame = Frame(self.meas_his, bg='gray85')
         top_frame.grid(row=0, column=0, rowspan=1, columnspan=12, pady=20, padx=20)
-        Label(top_frame, text="ID Number:",  bg='gray85', font=FONT).grid(row=0, column=0, pady=5, padx=5, sticky=W)
-        Label(top_frame, text="Name:",  bg='gray85', font=FONT).grid(row=0, column=2, pady=5, padx=5, sticky=W)
-        Label(top_frame, text="Surname:",  bg='gray85', font=FONT).grid(row=0, column=4, pady=5, padx=5, sticky=W)
-        Label(top_frame, textvariable=self.cur_patient['id_num'], width=15).grid(row=0, column=1, pady=5, padx=5, sticky=W)
-        Label(top_frame, textvariable=self.cur_patient['name'], width=15).grid(row=0, column=3, pady=5, padx=5, sticky=W)
-        Label(top_frame, textvariable=self.cur_patient['surname'], width=15).grid(row=0, column=5, pady=5, padx=5, sticky=W)
+        Label(top_frame, text="ID Number:", bg='gray85', font=FONT).grid(row=0, column=0, pady=5, padx=5, sticky=W)
+        Label(top_frame, text="Name:", bg='gray85', font=FONT).grid(row=0, column=2, pady=5, padx=5, sticky=W)
+        Label(top_frame, text="Surname:", bg='gray85', font=FONT).grid(row=0, column=4, pady=5, padx=5, sticky=W)
+        Label(top_frame, textvariable=self.cur_patient['id_num'], width=15).grid(row=0, column=1, pady=5, padx=5,
+                                                                                 sticky=W)
+        Label(top_frame, textvariable=self.cur_patient['name'], width=15).grid(row=0, column=3, pady=5, padx=5,
+                                                                               sticky=W)
+        Label(top_frame, textvariable=self.cur_patient['surname'], width=15).grid(row=0, column=5, pady=5, padx=5,
+                                                                                  sticky=W)
         # make table
         self.his_table = Table(self.meas_his, COLUMNS_NAMES, 1, 0)
 
@@ -243,8 +294,27 @@ class Screen:
                                                                                sticky=W)
         Label(top_frame, textvariable=self.cur_patient['surname'], width=15).grid(row=0, column=5, pady=5, padx=5,
                                                                                   sticky=W)
+        self.cam_status = Label(self.cam_interface, bg="red", width=10, height=4)
+        self.cam_status.grid(row=1, column=1)
+        Button(self.cam_interface, text="connect to camera", width=20, height=4,
+               command=lambda: msg.showerror("Camera Error",
+                                             "connection failed") if self.save_meas() else self.cam_status.config(
+                   bg="green")).grid(row=1, column=0)
+        Button(self.cam_interface, text="capture", width=20, height=4,
+               command=self.set_capture_num).grid(
+            row=2,
+            column=0)
+        Button(self.cam_interface, text="disconnect camera", width=20, height=4,
+               command=lambda: msg.showerror("no cam connection") if self.cam.close_pipe() else self.cam_status.config(
+                   bg="red")).grid(row=4, column=0)
+        self.dist_label = Label(self.cam_interface, text="0.0")
+        self.dist_label.grid(row=2, column=1)
 
-        Button(self.meas, text="Save new measurement", width=20, height=4, command=self.save_meas).grid(row=1, column=0)
+    def set_capture_num(self):
+        if not self.cam.ready:
+            msg.showerror("Camera Error", "no cam connection")
+        else:
+            self.capture_num = 1
 
     def save_meas(self):
         self.cur_meas["Date"] = str(datetime.date.today())
@@ -256,9 +326,12 @@ class Screen:
                        PATIENT_COLS)
         rowid = len(self.db.get_all_tab(PAT_TABLE_NAME.format(rowid=self.cur_rowid)))
         self.his_table.insert(tuple(self.cur_meas.values()))
-        new_dir = os.path.join(self.data_path, "Patient_" + str(self.cur_rowid), f"{str(datetime.date.today())}_{rowid}")
+        new_dir = os.path.join(self.data_path, "Patient_" + str(self.cur_patient['id_num'].get()),
+                               f"{str(datetime.date.today())}_{rowid}")
         if not os.path.exists(new_dir):
             os.mkdir(new_dir)
+        self.current_dir = new_dir
+        self.cam.init_pipes(self.current_dir + "/" + self.cur_patient['id_num'].get() + f"_{rowid}" + ".bag")
 
 
 class Table:
@@ -344,12 +417,13 @@ class MedText:
     def clear_search(self, event):
         self.new_line.set("")
 
+
 class Date:
     def __init__(self, parent, row, col):
         Label(parent, text="Date of birth:", font=FONT, bg='gray85').grid(row=row, column=col)
         Date_frame = Frame(parent)
         Date_frame.grid(row=row, column=col + 1)
-        self.day = ttk.Combobox(Date_frame, values=[i for i in range(1,32)], width=5)
+        self.day = ttk.Combobox(Date_frame, values=[i for i in range(1, 32)], width=5)
         self.day.insert(0, "Day")
         self.day.grid(row=0, column=0, sticky=W)
         self.month = ttk.Combobox(Date_frame, values=[i for i in range(1, 13)], width=5)
@@ -387,6 +461,7 @@ class Date:
         today = datetime.date.today()
         age = relativedelta(today, birth)
         return f"{age.years}.{age.months}"
+
 
 class Database:
     """sqlite3 database class that holds testers jobs"""
@@ -435,6 +510,12 @@ class Database:
         self.cur.execute(f"SELECT * FROM {table} WHERE {col} = '{buffer}'")
         return self.cur.fetchall()
 
+    def tab_to_csv(self, tab_name, columns_tup):
+        with open(f'{tab_name}.csv', 'w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(columns_tup)
+            writer.writerows(self.get_all_tab(tab_name))
+
     def get_rowid(self, table, id_num, col_tup):
         self.create_table(table, col_tup)
         self.cur.execute(f"SELECT rowid FROM {table} WHERE id_num = '{id_num}'")
@@ -459,8 +540,8 @@ class Database:
 if __name__ == '__main__':
     root = Tk()
     root.title("BackScn")
-    img = Image("photo", file="/Users/guyfilo/PycharmProjects/ad-or/icon.png")
-    root.tk.call('wm', 'iconphoto', root._w, img)
+    ##img = Image("photo", file="/Users/guyfilo/PycharmProjects/ad-or/icon.png")
+    # root.tk.call('wm', 'iconphoto', root._w)
     root.geometry('{}x{}'.format(1200, 800))
     Screen(root)
     root.mainloop()
